@@ -52,6 +52,16 @@ DEFAULT_THUMB = "ShrutiMusic/assets/ShrutiBots.jpg"
 # fine as long as you update this constant to match).
 BANNER_PATH = "ShrutiMusic/assets/sakura_banner.png"
 
+# Extra fallback locations/extensions we'll also try, in case the file was
+# saved with a slightly different name/extension than BANNER_PATH.
+BANNER_PATH_CANDIDATES = [
+    BANNER_PATH,
+    "ShrutiMusic/assets/sakura_banner.jpg",
+    "ShrutiMusic/assets/sakura_banner.jpeg",
+    "ShrutiMusic/assets/sakura.png",
+    "ShrutiMusic/assets/sakura.jpg",
+]
+
 # Theme colors pulled from the banner (candy pink) so the player bar matches.
 THEME_PINK = (232, 90, 130)
 THEME_PINK_DARK = (60, 18, 30)
@@ -106,10 +116,19 @@ def load_banner_background():
     """Load the fixed branded banner, fit it into BANNER_H without stretching,
     and fill any leftover width with a soft blurred version of itself so it
     always looks full-bleed regardless of the source image's exact ratio."""
-    try:
-        banner = Image.open(BANNER_PATH).convert("RGBA")
-    except Exception:
-        # graceful fallback: plain themed gradient if the banner file is missing
+    banner = None
+    for candidate in BANNER_PATH_CANDIDATES:
+        try:
+            if os.path.exists(candidate):
+                banner = Image.open(candidate).convert("RGBA")
+                break
+        except Exception as e:
+            print(f"[load_banner_background] failed to open {candidate}: {e}")
+
+    if banner is None:
+        print(f"[load_banner_background] BANNER not found in any of: {BANNER_PATH_CANDIDATES} "
+              f"(cwd={os.getcwd()}) - using plain fallback background. "
+              f"Check that the file actually exists at that path relative to where your bot runs.")
         fallback = Image.new("RGBA", (CANVAS_W, BANNER_H), (255, 235, 240, 255))
         return fallback
 
@@ -239,9 +258,13 @@ async def gen_thumb(videoid: str):
         draw.text((text_x, title_y), title_lines[0], fill=(255, 255, 255, 255), font=title_font)
 
         meta_font = load_font(FONT_REGULAR_PATH, 22)
-        meta_text = f"{channel}  \u2022  {views}"
         meta_y = title_y + 40
-        draw.text((text_x, meta_y), meta_text, fill=(230, 200, 210, 255), font=meta_font)
+        channel_w = draw.textlength(str(channel), font=meta_font)
+        draw.text((text_x, meta_y), str(channel), fill=(230, 200, 210, 255), font=meta_font)
+        dot_x = text_x + channel_w + 14
+        dot_y = meta_y + 12
+        draw.ellipse([dot_x, dot_y, dot_x + 5, dot_y + 5], fill=(230, 200, 210, 255))
+        draw.text((dot_x + 16, meta_y), str(views), fill=(230, 200, 210, 255), font=meta_font)
 
         # progress bar + timer
         duration_label = duration
@@ -268,15 +291,26 @@ async def gen_thumb(videoid: str):
         draw.text((text_x + bar_w - dur_w, bar_y2 + 14), str(duration_label),
                   fill=(235, 235, 240, 255), font=time_font)
 
-        # little "LIVE / NOW PLAYING" pill on the right of the player bar
-        pill_text = "\u266a  PLAYING"
+        # little "NOW PLAYING" pill on the right of the player bar, with a
+        # hand-drawn note icon (no unicode glyph, so it never shows a tofu box)
+        pill_text = "PLAYING"
         pill_font = load_font(FONT_BOLD_PATH, 22)
-        pill_w = draw.textlength(pill_text, font=pill_font) + 36
+        icon_w = 22
+        pill_w = draw.textlength(pill_text, font=pill_font) + icon_w + 46
         pill_x = CANVAS_W - pill_w - 30
         pill_y = bar_y + 24
         draw.rounded_rectangle([pill_x, pill_y, pill_x + pill_w, pill_y + 40],
                                radius=20, fill=(*THEME_PINK, 230))
-        draw.text((pill_x + 18, pill_y + 8), pill_text, fill=(255, 255, 255, 255), font=pill_font)
+
+        # tiny music-note icon: one stem + two note-heads
+        nx, ny = pill_x + 18, pill_y + 10
+        draw.ellipse([nx, ny + 14, nx + 8, ny + 20], fill=(255, 255, 255, 255))
+        draw.ellipse([nx + 10, ny + 11, nx + 18, ny + 17], fill=(255, 255, 255, 255))
+        draw.line([(nx + 7, ny + 4), (nx + 7, ny + 17)], fill=(255, 255, 255, 255), width=2)
+        draw.line([(nx + 17, ny + 2), (nx + 17, ny + 14)], fill=(255, 255, 255, 255), width=2)
+        draw.line([(nx + 7, ny + 4), (nx + 17, ny + 2)], fill=(255, 255, 255, 255), width=2)
+
+        draw.text((pill_x + icon_w + 24, pill_y + 8), pill_text, fill=(255, 255, 255, 255), font=pill_font)
 
         # ---- rounded outer canvas corners (card look) ----
         rounded_mask = Image.new("L", canvas.size, 0)

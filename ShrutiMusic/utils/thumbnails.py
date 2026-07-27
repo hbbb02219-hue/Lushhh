@@ -36,18 +36,39 @@ import math
 CACHE_DIR = Path("cache")
 CACHE_DIR.mkdir(exist_ok=True)
 
-CANVAS_W, CANVAS_H = 1320, 760
+# ---------------------------------------------------------------------------
+# Layout: fixed branded banner on top, dynamic "now playing" bar underneath
+# ---------------------------------------------------------------------------
+CANVAS_W = 1320
+BANNER_H = 760
+PLAYER_H = 150
+CANVAS_H = BANNER_H + PLAYER_H
 
 FONT_REGULAR_PATH = "ShrutiMusic/assets/font2.ttf"
 FONT_BOLD_PATH = "ShrutiMusic/assets/font3.ttf"
 DEFAULT_THUMB = "ShrutiMusic/assets/ShrutiBots.jpg"
+
+# Save your uploaded "Sakura X Music" image at this exact path (any name is
+# fine as long as you update this constant to match).
+BANNER_PATH = "ShrutiMusic/assets/sakura_banner.png"
+
+# Theme colors pulled from the banner (candy pink) so the player bar matches.
+THEME_PINK = (232, 90, 130)
+THEME_PINK_DARK = (60, 18, 30)
 
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
-def wrap_text(draw, text, font, max_width):
+def load_font(path, size):
+    try:
+        return ImageFont.truetype(path, size)
+    except Exception:
+        return ImageFont.load_default()
+
+
+def wrap_text(draw, text, font, max_width, max_lines=1):
     words = text.split()
     lines = []
     current_line = ""
@@ -64,232 +85,69 @@ def wrap_text(draw, text, font, max_width):
     if current_line:
         lines.append(current_line)
 
-    return lines[:2]
+    lines = lines[:max_lines]
+    if len(lines) == max_lines:
+        last = lines[-1]
+        while draw.textlength(last + "...", font=font) > max_width and len(last) > 3:
+            last = last[:-1]
+        lines[-1] = last + "..." if len(words) > 1 else last
+    return lines
 
 
-def random_gradient():
-    # Soft, candy / pastel-leaning palettes for a "cute" look, mixed with a
-    # few moody ones so it never feels repetitive.
-    colors = [
-        [(30, 16, 55), (94, 48, 120), (44, 22, 74)],      # grape soda
-        [(20, 14, 40), (70, 40, 110), (30, 20, 60)],      # violet night
-        [(45, 20, 60), (140, 70, 130), (60, 25, 70)],     # bubblegum
-        [(15, 25, 45), (55, 70, 130), (25, 35, 70)],      # blueberry
-        [(10, 30, 40), (30, 90, 110), (15, 45, 55)],      # mint teal
-        [(50, 20, 35), (150, 60, 90), (60, 25, 45)],      # rose
-        [(20, 20, 30), (60, 55, 90), (30, 30, 50)],       # slate dream
-        [(35, 15, 45), (110, 55, 140), (45, 20, 60)],     # orchid
-        [(15, 30, 30), (40, 100, 95), (20, 50, 50)],      # seafoam
-        [(40, 18, 20), (130, 65, 55), (55, 25, 25)],      # peach ember
-    ]
-    return random.choice(colors)
-
-
-def apply_gradient(canvas, colors):
-    overlay = Image.new('RGBA', canvas.size, (0, 0, 0, 0))
-    draw = ImageDraw.Draw(overlay)
-
-    for y in range(CANVAS_H):
-        progress = y / CANVAS_H
-
-        if progress < 0.4:
-            t = progress / 0.4
-            r = int(colors[0][0] * (1 - t) + colors[1][0] * t)
-            g = int(colors[0][1] * (1 - t) + colors[1][1] * t)
-            b = int(colors[0][2] * (1 - t) + colors[1][2] * t)
-        else:
-            t = (progress - 0.4) / 0.6
-            r = int(colors[1][0] * (1 - t) + colors[2][0] * t)
-            g = int(colors[1][1] * (1 - t) + colors[2][1] * t)
-            b = int(colors[1][2] * (1 - t) + colors[2][2] * t)
-
-        draw.line([(0, y), (CANVAS_W, y)], fill=(r, g, b, 255))
-
-    return Image.alpha_composite(canvas, overlay)
-
-
-def add_soft_bokeh(canvas, accent_color):
-    """Big soft blurred circles floating in the background — the 'cute' glow."""
-    bokeh_layer = Image.new("RGBA", canvas.size, (0, 0, 0, 0))
-    bdraw = ImageDraw.Draw(bokeh_layer)
-
-    for _ in range(random.randint(4, 7)):
-        r = random.randint(60, 160)
-        x = random.randint(-40, CANVAS_W + 40)
-        y = random.randint(-40, CANVAS_H + 40)
-        alpha = random.randint(18, 40)
-        color = random.choice([accent_color, (255, 255, 255)])
-        bdraw.ellipse([x - r, y - r, x + r, y + r], fill=(*color, alpha))
-
-    bokeh_layer = bokeh_layer.filter(ImageFilter.GaussianBlur(35))
-    return Image.alpha_composite(canvas, bokeh_layer)
-
-
-def random_layout():
-    layouts = [
-        {
-            'art_size': random.randint(420, 500),
-            'art_x': random.randint(70, 120),
-            'art_shape': random.choice(['circle', 'rounded', 'blob']),
-            'text_align': 'right',
-            'accent_style': random.choice(['sparkle', 'dot', 'wave']),
-        },
-        {
-            'art_size': random.randint(400, 480),
-            'art_x': CANVAS_W - random.randint(500, 600),
-            'art_shape': random.choice(['circle', 'rounded', 'blob']),
-            'text_align': 'left',
-            'accent_style': random.choice(['sparkle', 'wave', 'none']),
-        },
-        {
-            'art_size': random.randint(390, 470),
-            'art_x': random.randint(90, 140),
-            'art_shape': random.choice(['circle', 'rounded', 'hexagon']),
-            'text_align': 'right',
-            'accent_style': random.choice(['dot', 'sparkle', 'wave']),
-        },
-    ]
-    return random.choice(layouts)
-
-
-def create_shape_mask(size, shape):
-    # supersample for smoother edges on rounded/blob shapes
+def create_circle_mask(size):
     ss = 4
     big = size * ss
     mask = Image.new("L", (big, big), 0)
-    draw = ImageDraw.Draw(mask)
-
-    if shape == 'circle':
-        draw.ellipse([0, 0, big, big], fill=255)
-    elif shape == 'rounded':
-        radius = int(big * random.uniform(0.16, 0.26))
-        draw.rounded_rectangle([0, 0, big, big], radius=radius, fill=255)
-    elif shape == 'blob':
-        # a gentle "squircle" — rounder & cuter than a plain rounded-rect
-        radius = int(big * 0.32)
-        draw.rounded_rectangle([0, 0, big, big], radius=radius, fill=255)
-        draw = ImageDraw.Draw(mask)
-    elif shape == 'hexagon':
-        center = big // 2
-        radius = big // 2 - int(big * 0.02)
-        points = []
-        for i in range(6):
-            angle = math.pi / 3 * i - math.pi / 6
-            x = center + radius * math.cos(angle)
-            y = center + radius * math.sin(angle)
-            points.append((x, y))
-        draw.polygon(points, fill=255)
-    else:
-        draw.ellipse([0, 0, big, big], fill=255)
-
-    mask = mask.resize((size, size), Image.LANCZOS)
-    return mask
+    ImageDraw.Draw(mask).ellipse([0, 0, big, big], fill=255)
+    return mask.resize((size, size), Image.LANCZOS)
 
 
-def random_accent_color():
-    # Soft pastel / candy accents for a cuter vibe
-    colors = [
-        (255, 158, 200),   # candy pink
-        (168, 197, 255),   # baby blue
-        (255, 209, 148),   # peach
-        (190, 168, 255),   # lavender
-        (150, 235, 210),   # mint
-        (255, 179, 186),   # blush
-        (180, 225, 255),   # sky
-        (255, 200, 235),   # cotton candy
-        (200, 235, 160),   # soft lime
-        (255, 224, 145),   # honey
-    ]
-    return random.choice(colors)
+def load_banner_background():
+    """Load the fixed branded banner, fit it into BANNER_H without stretching,
+    and fill any leftover width with a soft blurred version of itself so it
+    always looks full-bleed regardless of the source image's exact ratio."""
+    try:
+        banner = Image.open(BANNER_PATH).convert("RGBA")
+    except Exception:
+        # graceful fallback: plain themed gradient if the banner file is missing
+        fallback = Image.new("RGBA", (CANVAS_W, BANNER_H), (255, 235, 240, 255))
+        return fallback
 
+    # blurred cover-fit fill layer (fills the full canvas edge-to-edge)
+    fill_scale = max(CANVAS_W / banner.width, BANNER_H / banner.height)
+    fill = banner.resize((int(banner.width * fill_scale) + 2, int(banner.height * fill_scale) + 2), Image.LANCZOS)
+    fx = (fill.width - CANVAS_W) // 2
+    fy = (fill.height - BANNER_H) // 2
+    fill = fill.crop((fx, fy, fx + CANVAS_W, fy + BANNER_H))
+    fill = fill.filter(ImageFilter.GaussianBlur(30))
 
-def add_particles(draw, accent_color):
-    for _ in range(random.randint(12, 22)):
-        x = random.randint(0, CANVAS_W)
-        y = random.randint(0, CANVAS_H)
-        size = random.randint(1, 3)
-        alpha = random.randint(40, 110)
-        draw.ellipse([x, y, x + size, y + size], fill=(*accent_color, alpha))
+    # sharp contain-fit layer (keeps the whole artwork visible, no cropping)
+    contain_scale = min(CANVAS_W / banner.width, BANNER_H / banner.height)
+    sharp = banner.resize((int(banner.width * contain_scale), int(banner.height * contain_scale)), Image.LANCZOS)
+    sx = (CANVAS_W - sharp.width) // 2
+    sy = (BANNER_H - sharp.height) // 2
 
-
-def draw_sparkle(draw, x, y, size, color, alpha=220):
-    """A tiny 4-point sparkle/star — cute accent."""
-    draw.line([(x - size, y), (x + size, y)], fill=(*color, alpha), width=max(2, size // 6))
-    draw.line([(x, y - size), (x, y + size)], fill=(*color, alpha), width=max(2, size // 6))
-    small = size // 2
-    draw.line([(x - small, y - small), (x + small, y + small)], fill=(*color, int(alpha * 0.6)), width=1)
-    draw.line([(x - small, y + small), (x + small, y - small)], fill=(*color, int(alpha * 0.6)), width=1)
-
-
-def add_accent_elements(draw, layout, accent_color):
-    style = layout['accent_style']
-
-    if style == 'sparkle':
-        for _ in range(random.randint(4, 7)):
-            x = random.randint(40, CANVAS_W - 40)
-            y = random.randint(40, CANVAS_H - 40)
-            size = random.randint(6, 16)
-            draw_sparkle(draw, x, y, size, accent_color)
-
-    elif style == 'dot':
-        for _ in range(random.randint(4, 9)):
-            x = random.randint(40, CANVAS_W - 40)
-            y = random.randint(40, CANVAS_H - 40)
-            size = random.randint(4, 9)
-            draw.ellipse([x, y, x + size, y + size], fill=(*accent_color, 130))
-
-    elif style == 'wave':
-        y_start = random.randint(90, 150)
-        for x in range(0, CANVAS_W, 4):
-            wave_y = y_start + int(math.sin(x / 55) * 18)
-            draw.ellipse([x, wave_y, x + 3, wave_y + 3], fill=(*accent_color, 90))
-
-
-def add_glow_ring(canvas, x, y, size, color, blur_amount):
-    ring_size = size + 40
-    ring_img = Image.new("RGBA", (ring_size, ring_size), (0, 0, 0, 0))
-    rdraw = ImageDraw.Draw(ring_img)
-
-    for i in range(6):
-        offset = i * 4
-        alpha = 160 - (i * 24)
-        rdraw.ellipse([offset, offset, ring_size - offset, ring_size - offset],
-                      outline=(*color, max(alpha, 0)), width=3)
-
-    ring_img = ring_img.filter(ImageFilter.GaussianBlur(blur_amount))
-    canvas.paste(ring_img, (x - 20, y - 20), ring_img)
-
-
-def add_glass_panel(canvas, x, y, w, h, radius=28, alpha=55):
-    """A soft frosted-glass style backing panel behind the text block."""
-    panel = Image.new("RGBA", canvas.size, (0, 0, 0, 0))
-    pdraw = ImageDraw.Draw(panel)
-    pdraw.rounded_rectangle([x, y, x + w, y + h], radius=radius,
-                             fill=(255, 255, 255, alpha))
-    panel = panel.filter(ImageFilter.GaussianBlur(2))
-    return Image.alpha_composite(canvas, panel)
+    canvas = fill.copy()
+    canvas.paste(sharp, (sx, sy), sharp)
+    return canvas
 
 
 def draw_progress_bar(draw, x, y, width, height, progress, accent_color):
-    """Cute little rounded progress/duration bar."""
     draw.rounded_rectangle([x, y, x + width, y + height], radius=height // 2,
                             fill=(255, 255, 255, 60))
     fill_w = max(height, int(width * progress))
     draw.rounded_rectangle([x, y, x + fill_w, y + height], radius=height // 2,
-                            fill=(*accent_color, 230))
-    knob_r = int(height * 1.6)
+                            fill=(*accent_color, 235))
+    knob_r = int(height * 1.5)
     cx, cy = x + fill_w, y + height // 2
-    draw.ellipse([cx - knob_r, cy - knob_r, cx + knob_r, cy + knob_r],
-                 fill=(255, 255, 255, 255))
+    draw.ellipse([cx - knob_r, cy - knob_r, cx + knob_r, cy + knob_r], fill=(255, 255, 255, 255))
     draw.ellipse([cx - knob_r + 3, cy - knob_r + 3, cx + knob_r - 3, cy + knob_r - 3],
                  fill=(*accent_color, 255))
 
 
-def load_font(path, size):
-    try:
-        return ImageFont.truetype(path, size)
-    except Exception:
-        return ImageFont.load_default()
+def draw_sparkle(draw, x, y, size, color, alpha=220):
+    draw.line([(x - size, y), (x + size, y)], fill=(*color, alpha), width=max(2, size // 6))
+    draw.line([(x, y - size), (x, y + size)], fill=(*color, alpha), width=max(2, size // 6))
 
 
 # ---------------------------------------------------------------------------
@@ -338,155 +196,91 @@ async def gen_thumb(videoid: str):
             return None
 
     try:
-        canvas = Image.new("RGBA", (CANVAS_W, CANVAS_H), (0, 0, 0, 255))
+        # ---- top section: fixed Sakura X Music banner (always the same) ----
+        banner_bg = load_banner_background()
+        canvas = Image.new("RGBA", (CANVAS_W, CANVAS_H), THEME_PINK_DARK + (255,))
+        canvas.paste(banner_bg, (0, 0), banner_bg)
 
-        gradient_colors = random_gradient()
-        canvas = apply_gradient(canvas, gradient_colors)
-
-        layout = random_layout()
-        accent_color = random_accent_color()
-
-        # soft glowing bokeh circles behind everything — this is what gives
-        # the "cute / dreamy" feel instead of flat particles only
-        canvas = add_soft_bokeh(canvas, accent_color)
-
+        # ---- bottom section: dynamic "now playing" player bar ----
         draw = ImageDraw.Draw(canvas)
-        add_particles(draw, accent_color)
-        canvas = canvas.filter(ImageFilter.GaussianBlur(0.6))
+        bar_x, bar_y = 0, BANNER_H
+        draw.rectangle([bar_x, bar_y, CANVAS_W, CANVAS_H], fill=(*THEME_PINK_DARK, 255))
 
-        art_size = layout['art_size']
-        art_x = layout['art_x']
-        art_y = (CANVAS_H - art_size) // 2
+        # soft pink glow line separating banner from the player bar
+        draw.rectangle([0, bar_y, CANVAS_W, bar_y + 3], fill=(*THEME_PINK, 200))
 
-        mask = create_shape_mask(art_size, layout['art_shape'])
+        pad = 22
+        art_size = PLAYER_H - pad * 2
+        art_x = pad
+        art_y = bar_y + pad
 
-        art_source = ImageEnhance.Contrast(base_img).enhance(1.05)
-        art_source = ImageEnhance.Color(art_source).enhance(1.1)
-        art = art_source.resize((art_size, art_size), Image.LANCZOS)
+        mask = create_circle_mask(art_size)
+        art = base_img.resize((art_size, art_size), Image.LANCZOS)
         art.putalpha(mask)
 
-        # glow ring almost always on now — reads as "cute halo" around the art
-        add_glow_ring(canvas, art_x, art_y, art_size, accent_color, random.randint(10, 16))
-
-        # thin white "sticker" border ring right at the edge of the art
-        border_pad = 6
-        border_layer = Image.new("RGBA", canvas.size, (0, 0, 0, 0))
-        bdraw = ImageDraw.Draw(border_layer)
-        border_mask = create_shape_mask(art_size + border_pad * 2, layout['art_shape'])
-        border_img = Image.new("RGBA", (art_size + border_pad * 2, art_size + border_pad * 2),
-                                (255, 255, 255, 235))
-        border_img.putalpha(border_mask)
-        canvas.paste(border_img, (art_x - border_pad, art_y - border_pad), border_img)
+        # glow ring behind album art
+        ring = Image.new("RGBA", canvas.size, (0, 0, 0, 0))
+        rdraw = ImageDraw.Draw(ring)
+        rdraw.ellipse([art_x - 6, art_y - 6, art_x + art_size + 6, art_y + art_size + 6],
+                     outline=(*THEME_PINK, 200), width=3)
+        ring = ring.filter(ImageFilter.GaussianBlur(2))
+        canvas = Image.alpha_composite(canvas, ring)
         canvas.paste(art, (art_x, art_y), art)
 
         draw = ImageDraw.Draw(canvas)
-        add_accent_elements(draw, layout, accent_color)
 
-        # ---- Branding ----
-        brand_font = load_font(FONT_BOLD_PATH, random.randint(34, 44))
-        brand_x = random.randint(35, 55)
-        brand_y = random.randint(28, 42)
+        text_x = art_x + art_size + 26
+        max_text_w = CANVAS_W - text_x - 220  # leave room for the timer on the right
 
-        draw.text((brand_x + 2, brand_y + 2), app.username, fill=(0, 0, 0, 150), font=brand_font)
-        draw.text((brand_x, brand_y), app.username, fill=(255, 255, 255, 255), font=brand_font)
+        title_font = load_font(FONT_BOLD_PATH, 30)
+        title_lines = wrap_text(draw, title, title_font, max_text_w, max_lines=1)
+        title_y = bar_y + 24
+        draw.text((text_x + 1, title_y + 1), title_lines[0], fill=(0, 0, 0, 160), font=title_font)
+        draw.text((text_x, title_y), title_lines[0], fill=(255, 255, 255, 255), font=title_font)
 
-        brand_bbox = draw.textbbox((brand_x, brand_y), app.username, font=brand_font)
-        brand_w = brand_bbox[2] - brand_bbox[0]
-        underline_y = brand_bbox[3] + 6
-        draw.line([(brand_x, underline_y), (brand_x + brand_w, underline_y)],
-                  fill=(*accent_color, 220), width=3)
-        # cute little sparkle right after the brand name
-        draw_sparkle(draw, brand_x + brand_w + 16, brand_y + 14, 8, accent_color)
+        meta_font = load_font(FONT_REGULAR_PATH, 22)
+        meta_text = f"{channel}  \u2022  {views}"
+        meta_y = title_y + 40
+        draw.text((text_x, meta_y), meta_text, fill=(230, 200, 210, 255), font=meta_font)
 
-        # ---- Text block position ----
-        if layout['text_align'] == 'right':
-            info_x = art_x + art_size + random.randint(60, 100)
-            max_text_w = CANVAS_W - info_x - 50
-        else:
-            info_x = random.randint(50, 100)
-            max_text_w = art_x - info_x - 50
-
-        # soft glass panel behind the info block for readability + cuteness
-        panel_x = info_x - 24
-        panel_y = 95
-        panel_w = max_text_w + 48
-        panel_h = CANVAS_H - 130
-        canvas = add_glass_panel(canvas, panel_x, panel_y, panel_w, panel_h, radius=32, alpha=45)
-        draw = ImageDraw.Draw(canvas)
-        # redraw accents/branding on top since glass panel repainted that area only if overlapping;
-        # panel sits within the text zone so branding (top-left corner) is unaffected in most layouts.
-
-        np_options = ["NOW PLAYING", "PLAYING NOW", "ON REPEAT", "TUNE IN"]
-        np_font = load_font(FONT_BOLD_PATH, random.randint(48, 64))
-        np_text = random.choice(np_options)
-        np_y = random.randint(130, 165)
-
-        draw.text((info_x + 3, np_y + 3), np_text, fill=(0, 0, 0, 170), font=np_font)
-        draw.text((info_x, np_y), np_text, fill=(*accent_color, 255), font=np_font)
-        draw_sparkle(draw, info_x - 22, np_y + 20, 10, accent_color)
-
-        title_font_size = random.randint(36, 46)
-        title_font = load_font(FONT_BOLD_PATH, title_font_size)
-        title_lines = wrap_text(draw, title, title_font, max_text_w)
-        title_text = "\n".join(title_lines)
-        title_y = np_y + random.randint(75, 100)
-
-        draw.multiline_text((info_x + 2, title_y + 2), title_text,
-                            fill=(0, 0, 0, 160), font=title_font,
-                            spacing=random.randint(8, 14))
-        draw.multiline_text((info_x, title_y), title_text,
-                            fill=(255, 255, 255, 255), font=title_font,
-                            spacing=random.randint(8, 14))
-
-        meta_font = load_font(FONT_REGULAR_PATH, random.randint(26, 32))
-        meta_y = title_y + random.randint(110, 145)
-        line_spacing = random.randint(42, 52)
-
+        # progress bar + timer
         duration_label = duration
-        progress_ratio = random.uniform(0.25, 0.75)
+        progress_ratio = random.uniform(0.2, 0.7)
         total_seconds = None
         if duration and ":" in str(duration):
             parts = str(duration).split(":")
             if len(parts) == 2 and parts[0].isdigit() and parts[1].isdigit():
-                duration_label = f"{parts[0]}m {parts[1]}s"
+                duration_label = f"{int(parts[0]):d}:{parts[1]}"
                 total_seconds = int(parts[0]) * 60 + int(parts[1])
 
-        meta_items = [
-            f"\u25B6 {views}",
-            f"\u2665 {channel}",
-        ]
-
-        for idx, meta in enumerate(meta_items):
-            y = meta_y + (idx * line_spacing)
-            draw.text((info_x + 1, y + 1), meta, fill=(0, 0, 0, 140), font=meta_font)
-            draw.text((info_x, y), meta, fill=(235, 235, 245, 255), font=meta_font)
-
-        # ---- Cute progress bar with elapsed / total ----
-        bar_y = meta_y + (len(meta_items) * line_spacing) + 18
+        bar_y2 = bar_y + PLAYER_H - 40
         bar_w = max_text_w
-        bar_h = 10
-        draw_progress_bar(draw, info_x, bar_y, bar_w, bar_h, progress_ratio, accent_color)
+        draw_progress_bar(draw, text_x, bar_y2, bar_w, 8, progress_ratio, THEME_PINK)
 
         elapsed_label = "0:00"
         if total_seconds:
-            elapsed_sec = int(total_seconds * progress_ratio)
-            elapsed_label = f"{elapsed_sec // 60}:{elapsed_sec % 60:02d}"
+            e = int(total_seconds * progress_ratio)
+            elapsed_label = f"{e // 60}:{e % 60:02d}"
 
-        time_font = load_font(FONT_REGULAR_PATH, 22)
-        draw.text((info_x, bar_y + 18), elapsed_label, fill=(230, 230, 240, 255), font=time_font)
+        time_font = load_font(FONT_REGULAR_PATH, 20)
+        draw.text((text_x, bar_y2 + 14), elapsed_label, fill=(235, 235, 240, 255), font=time_font)
         dur_w = draw.textlength(str(duration_label), font=time_font)
-        draw.text((info_x + bar_w - dur_w, bar_y + 18), str(duration_label),
-                  fill=(230, 230, 240, 255), font=time_font)
+        draw.text((text_x + bar_w - dur_w, bar_y2 + 14), str(duration_label),
+                  fill=(235, 235, 240, 255), font=time_font)
 
-        # ---- Corner sparkle accents (replaces plain corner lines) ----
-        if random.choice([True, False]):
-            draw_sparkle(draw, 45, 45, random.randint(10, 16), accent_color, alpha=180)
-            draw_sparkle(draw, CANVAS_W - 45, 45, random.randint(10, 16), accent_color, alpha=180)
+        # little "LIVE / NOW PLAYING" pill on the right of the player bar
+        pill_text = "\u266a  PLAYING"
+        pill_font = load_font(FONT_BOLD_PATH, 22)
+        pill_w = draw.textlength(pill_text, font=pill_font) + 36
+        pill_x = CANVAS_W - pill_w - 30
+        pill_y = bar_y + 24
+        draw.rounded_rectangle([pill_x, pill_y, pill_x + pill_w, pill_y + 40],
+                               radius=20, fill=(*THEME_PINK, 230))
+        draw.text((pill_x + 18, pill_y + 8), pill_text, fill=(255, 255, 255, 255), font=pill_font)
 
-        # ---- Rounded outer canvas corners (cute card look) ----
+        # ---- rounded outer canvas corners (card look) ----
         rounded_mask = Image.new("L", canvas.size, 0)
-        rmdraw = ImageDraw.Draw(rounded_mask)
-        rmdraw.rounded_rectangle([0, 0, CANVAS_W, CANVAS_H], radius=36, fill=255)
+        ImageDraw.Draw(rounded_mask).rounded_rectangle([0, 0, CANVAS_W, CANVAS_H], radius=30, fill=255)
         final = Image.new("RGBA", canvas.size, (0, 0, 0, 255))
         final.paste(canvas, (0, 0), rounded_mask)
 

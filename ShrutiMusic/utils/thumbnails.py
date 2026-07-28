@@ -65,6 +65,8 @@ BANNER_PATH_CANDIDATES = [
 # Theme colors pulled from the banner (candy pink) so the player bar matches.
 THEME_PINK = (232, 90, 130)
 THEME_PINK_DARK = (60, 18, 30)
+THEME_GOLD = (255, 200, 90)
+LIVE_RED = (255, 55, 70)
 
 
 # ---------------------------------------------------------------------------
@@ -159,6 +161,12 @@ def draw_progress_bar(draw, x, y, width, height, progress, accent_color):
                             fill=(*accent_color, 235))
     knob_r = int(height * 1.5)
     cx, cy = x + fill_w, y + height // 2
+    # extra glow ring around knob for that "khatarnak" pop
+    glow = Image.new("RGBA", (knob_r * 6, knob_r * 6), (0, 0, 0, 0))
+    gdraw = ImageDraw.Draw(glow)
+    gdraw.ellipse([knob_r * 2, knob_r * 2, knob_r * 4, knob_r * 4], fill=(*accent_color, 120))
+    glow = glow.filter(ImageFilter.GaussianBlur(6))
+    draw._image.paste(glow, (int(cx - knob_r * 3), int(cy - knob_r * 3)), glow) if hasattr(draw, "_image") else None
     draw.ellipse([cx - knob_r, cy - knob_r, cx + knob_r, cy + knob_r], fill=(255, 255, 255, 255))
     draw.ellipse([cx - knob_r + 3, cy - knob_r + 3, cx + knob_r - 3, cy + knob_r - 3],
                  fill=(*accent_color, 255))
@@ -167,6 +175,63 @@ def draw_progress_bar(draw, x, y, width, height, progress, accent_color):
 def draw_sparkle(draw, x, y, size, color, alpha=220):
     draw.line([(x - size, y), (x + size, y)], fill=(*color, alpha), width=max(2, size // 6))
     draw.line([(x, y - size), (x, y + size)], fill=(*color, alpha), width=max(2, size // 6))
+    draw.line([(x - size * 0.6, y - size * 0.6), (x + size * 0.6, y + size * 0.6)],
+              fill=(*color, alpha - 60), width=max(1, size // 8))
+    draw.line([(x - size * 0.6, y + size * 0.6), (x + size * 0.6, y - size * 0.6)],
+              fill=(*color, alpha - 60), width=max(1, size // 8))
+
+
+def draw_live_badge(canvas, x, y, font):
+    """Glowing 'LIVE' pill with a pulsing red dot — the khatarnak status tag."""
+    draw = ImageDraw.Draw(canvas)
+    label = "LIVE"
+    dot_r = 8
+    pad_l = 22
+    text_w = draw.textlength(label, font=font)
+    pill_w = int(pad_l + dot_r * 2 + 14 + text_w + 22)
+    pill_h = 42
+
+    # outer glow
+    glow = Image.new("RGBA", canvas.size, (0, 0, 0, 0))
+    gdraw = ImageDraw.Draw(glow)
+    gdraw.rounded_rectangle([x, y, x + pill_w, y + pill_h], radius=pill_h // 2,
+                             fill=(*LIVE_RED, 160))
+    glow = glow.filter(ImageFilter.GaussianBlur(10))
+    canvas.alpha_composite(glow)
+
+    draw = ImageDraw.Draw(canvas)
+    draw.rounded_rectangle([x, y, x + pill_w, y + pill_h], radius=pill_h // 2,
+                            fill=(20, 8, 10, 235), outline=(*LIVE_RED, 255), width=2)
+
+    dot_x = x + pad_l
+    dot_y = y + pill_h // 2
+    # pulsing halo behind the dot
+    halo = Image.new("RGBA", canvas.size, (0, 0, 0, 0))
+    hdraw = ImageDraw.Draw(halo)
+    hdraw.ellipse([dot_x - dot_r * 2, dot_y - dot_r * 2, dot_x + dot_r * 2, dot_y + dot_r * 2],
+                  fill=(*LIVE_RED, 140))
+    halo = halo.filter(ImageFilter.GaussianBlur(6))
+    canvas.alpha_composite(halo)
+
+    draw = ImageDraw.Draw(canvas)
+    draw.ellipse([dot_x - dot_r, dot_y - dot_r, dot_x + dot_r, dot_y + dot_r], fill=(*LIVE_RED, 255))
+    draw.text((dot_x + dot_r + 12, y + (pill_h - font.size) // 2 - 2), label,
+               fill=(255, 255, 255, 255), font=font)
+    return pill_w, pill_h
+
+
+def draw_aura_border(canvas, inset=10, glow_color=THEME_GOLD, blur=18):
+    """Soft glowing aura ring around the whole card for that 'khatarnak' vibe."""
+    aura = Image.new("RGBA", canvas.size, (0, 0, 0, 0))
+    adraw = ImageDraw.Draw(aura)
+    adraw.rounded_rectangle([inset, inset, canvas.width - inset, canvas.height - inset],
+                             radius=34, outline=(*glow_color, 200), width=4)
+    aura = aura.filter(ImageFilter.GaussianBlur(blur))
+    canvas.alpha_composite(aura)
+    # crisp inner line on top of the glow
+    draw = ImageDraw.Draw(canvas)
+    draw.rounded_rectangle([inset, inset, canvas.width - inset, canvas.height - inset],
+                            radius=34, outline=(*glow_color, 230), width=2)
 
 
 # ---------------------------------------------------------------------------
@@ -220,13 +285,35 @@ async def gen_thumb(videoid: str):
         canvas = Image.new("RGBA", (CANVAS_W, CANVAS_H), THEME_PINK_DARK + (255,))
         canvas.paste(banner_bg, (0, 0), banner_bg)
 
+        # subtle darkening gradient over the banner so text/badges pop
+        shade = Image.new("RGBA", (CANVAS_W, BANNER_H), (0, 0, 0, 0))
+        sdraw = ImageDraw.Draw(shade)
+        for i in range(140):
+            alpha = int(120 * (i / 140))
+            sdraw.line([(0, i), (CANVAS_W, i)], fill=(0, 0, 0, alpha))
+        canvas.alpha_composite(shade)
+
+        # ---- khatarnak extras: LIVE badge + sparkles on the banner ----
+        badge_font = load_font(FONT_BOLD_PATH, 24)
+        draw_live_badge(canvas, 34, 30, badge_font)
+
+        sparkle_pts = [(CANVAS_W - 70, 60), (CANVAS_W - 130, 140), (CANVAS_W - 40, 190)]
+        for (sx, sy) in sparkle_pts:
+            draw_sparkle(ImageDraw.Draw(canvas), sx, sy, random.randint(10, 16), THEME_GOLD)
+
         # ---- bottom section: dynamic "now playing" player bar ----
         draw = ImageDraw.Draw(canvas)
         bar_x, bar_y = 0, BANNER_H
         draw.rectangle([bar_x, bar_y, CANVAS_W, CANVAS_H], fill=(*THEME_PINK_DARK, 255))
 
-        # soft pink glow line separating banner from the player bar
-        draw.rectangle([0, bar_y, CANVAS_W, bar_y + 3], fill=(*THEME_PINK, 200))
+        # soft glowing pink separator line between banner & player bar
+        sep_glow = Image.new("RGBA", canvas.size, (0, 0, 0, 0))
+        sgdraw = ImageDraw.Draw(sep_glow)
+        sgdraw.rectangle([0, bar_y - 2, CANVAS_W, bar_y + 5], fill=(*THEME_PINK, 220))
+        sep_glow = sep_glow.filter(ImageFilter.GaussianBlur(6))
+        canvas.alpha_composite(sep_glow)
+        draw = ImageDraw.Draw(canvas)
+        draw.rectangle([0, bar_y, CANVAS_W, bar_y + 3], fill=(*THEME_PINK, 255))
 
         pad = 22
         art_size = PLAYER_H - pad * 2
@@ -237,12 +324,14 @@ async def gen_thumb(videoid: str):
         art = base_img.resize((art_size, art_size), Image.LANCZOS)
         art.putalpha(mask)
 
-        # glow ring behind album art
+        # extra-bright double glow ring behind album art (khatarnak aura)
         ring = Image.new("RGBA", canvas.size, (0, 0, 0, 0))
         rdraw = ImageDraw.Draw(ring)
+        rdraw.ellipse([art_x - 10, art_y - 10, art_x + art_size + 10, art_y + art_size + 10],
+                      outline=(*THEME_GOLD, 180), width=3)
         rdraw.ellipse([art_x - 6, art_y - 6, art_x + art_size + 6, art_y + art_size + 6],
-                     outline=(*THEME_PINK, 200), width=3)
-        ring = ring.filter(ImageFilter.GaussianBlur(2))
+                     outline=(*THEME_PINK, 220), width=3)
+        ring = ring.filter(ImageFilter.GaussianBlur(3))
         canvas = Image.alpha_composite(canvas, ring)
         canvas.paste(art, (art_x, art_y), art)
 
@@ -299,6 +388,16 @@ async def gen_thumb(videoid: str):
         pill_w = draw.textlength(pill_text, font=pill_font) + icon_w + 46
         pill_x = CANVAS_W - pill_w - 30
         pill_y = bar_y + 24
+
+        # glow behind the pill
+        pill_glow = Image.new("RGBA", canvas.size, (0, 0, 0, 0))
+        pgdraw = ImageDraw.Draw(pill_glow)
+        pgdraw.rounded_rectangle([pill_x, pill_y, pill_x + pill_w, pill_y + 40],
+                                  radius=20, fill=(*THEME_PINK, 200))
+        pill_glow = pill_glow.filter(ImageFilter.GaussianBlur(8))
+        canvas.alpha_composite(pill_glow)
+        draw = ImageDraw.Draw(canvas)
+
         draw.rounded_rectangle([pill_x, pill_y, pill_x + pill_w, pill_y + 40],
                                radius=20, fill=(*THEME_PINK, 230))
 
@@ -312,14 +411,22 @@ async def gen_thumb(videoid: str):
 
         draw.text((pill_x + icon_w + 24, pill_y + 8), pill_text, fill=(255, 255, 255, 255), font=pill_font)
 
+        # ---- final khatarnak aura border around whole card ----
+        draw_aura_border(canvas)
+
         # ---- rounded outer canvas corners (card look) ----
         rounded_mask = Image.new("L", canvas.size, 0)
         ImageDraw.Draw(rounded_mask).rounded_rectangle([0, 0, CANVAS_W, CANVAS_H], radius=30, fill=255)
         final = Image.new("RGBA", canvas.size, (0, 0, 0, 255))
         final.paste(canvas, (0, 0), rounded_mask)
 
+        # slight overall punch (contrast + saturation) for a bolder finish
+        final_rgb = final.convert("RGB")
+        final_rgb = ImageEnhance.Contrast(final_rgb).enhance(1.06)
+        final_rgb = ImageEnhance.Color(final_rgb).enhance(1.12)
+
         out = CACHE_DIR / f"{videoid}_final.png"
-        final.convert("RGB").save(out, quality=95, optimize=True)
+        final_rgb.save(out, quality=95, optimize=True)
 
         if thumb_path and thumb_path.exists():
             try:
@@ -333,3 +440,21 @@ async def gen_thumb(videoid: str):
         print(f"[gen_thumb Processing Error] {e}")
         traceback.print_exc()
         return None
+
+
+# ---------------------------------------------------------------------------
+# OPTIONAL: sending the thumbnail as a Telegram "spoiler" (blurred, tap to
+# reveal). This is NOT part of image generation — it's how you send the photo
+# via Pyrogram. Use this wherever your play-handler currently calls
+# send_photo with the thumbnail.
+# ---------------------------------------------------------------------------
+async def send_now_playing_spoiler(chat_id: int, videoid: str, caption: str = None):
+    path = await gen_thumb(videoid)
+    if not path:
+        return None
+    return await app.send_photo(
+        chat_id=chat_id,
+        photo=path,
+        caption=caption,
+        has_spoiler=True,  # <-- yeh line hi Telegram ka "spoiler/blur" effect deti hai
+    )
